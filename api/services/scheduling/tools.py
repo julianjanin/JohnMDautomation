@@ -4,7 +4,8 @@ These tools are exposed to the voice workflow and can be called by the LLM
 during conversation. All state-changing operations are validated server-side.
 """
 
-from datetime import datetime, timedelta
+import hashlib
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -36,6 +37,20 @@ def reset_scheduler() -> None:
     """Reset the scheduler instance (for testing)."""
     global _scheduler
     _scheduler = None
+
+
+def generate_idempotency_key(**kwargs) -> str:
+    """Generate an idempotency key from the given parameters.
+    
+    This ensures that repeated calls with the same parameters
+    return the same result without creating duplicate appointments.
+    """
+    key_parts = []
+    for k, v in sorted(kwargs.items()):
+        if v is not None:
+            key_parts.append(f"{k}={v}")
+    key_string = "|".join(key_parts)
+    return hashlib.sha256(key_string.encode()).hexdigest()
 
 
 # Tool schemas for Dograh integration
@@ -134,13 +149,16 @@ async def find_availability_tool(
 
     scheduler = get_scheduler()
 
-    # Calculate date range
-    start_date = datetime.utcnow()
-    end_date = start_date + timedelta(days=days_ahead)
+    # Calculate date range using timezone-aware datetime
+    now = datetime.now(timezone.utc)
+    start_date = now
+    end_date = now + timedelta(days=days_ahead)
 
     if preferred_date:
         try:
+            # Parse as naive datetime and make it timezone-aware
             preferred_dt = datetime.strptime(preferred_date, "%Y-%m-%d")
+            preferred_dt = preferred_dt.replace(tzinfo=timezone.utc)
             start_date = preferred_dt
             end_date = preferred_dt + timedelta(days=1)
         except ValueError:
@@ -180,6 +198,7 @@ async def book_appointment_tool(
         }
 
     try:
+        # Parse ISO format datetime
         start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
     except ValueError:
         return {
@@ -193,8 +212,37 @@ async def book_appointment_tool(
     provider_id = "dr-john-li"
     location_id = "main-office"
 
-    # Calculate end time (30 minute appointment)
+    # Calculate end time (30 minute appointment) using timedelta
     end_dt = start_dt + timedelta(minutes=30)
+
+    # Generate idempotency key for this booking
+    idempotency_key = generate_idempotency_key(
+        patient_name=patient_name,
+        patient_phone=patient_phone,
+        appointment_type=appointment_type,
+        start_time=start_time,
+    )
+
+    # Validate that the requested slot is available
+    available_slots = await scheduler.find_availability(
+        appointment_type=appt_type,
+        start_date=start_dt,
+        end_date=start_dt + timedelta(minutes=1),
+        provider_id=provider_id,
+        location_id=location_id,
+    )
+    
+    slot_available = any(
+        slot.start_time == start_dt and slot.end_time == end_dt
+        for slot in available_slots
+    )
+    
+    if not slot_available:
+        return {
+            "success": False,
+            "error": "Requested time slot is no longer available. Please select another time.",
+            "alternative_slots": [],
+        }
 
     result = await scheduler.create_appointment(
         patient_name=patient_name,
@@ -206,6 +254,7 @@ async def book_appointment_tool(
         end_time=end_dt,
         reason=reason,
         new_patient=new_patient,
+        idempotency_key=idempotency_key,
     )
 
     if result.success and result.appointment:
@@ -242,10 +291,17 @@ async def reschedule_appointment_tool(
 
     scheduler = get_scheduler()
 
+    # Generate idempotency key
+    idempotency_key = generate_idempotency_key(
+        appointment_id=appointment_id,
+        new_start_time=new_start_time,
+    )
+
     result = await scheduler.reschedule_appointment(
         appointment_id=appointment_id,
         new_start_time=new_dt,
         new_end_time=new_dt + timedelta(minutes=30),
+        idempotency_key=idempotency_key,
     )
 
     if result.success and result.appointment:
@@ -277,7 +333,15 @@ async def cancel_appointment_tool(
 
     scheduler = get_scheduler()
 
-    result = await scheduler.cancel_appointment(appointment_id)
+    # Generate idempotency key
+    idempotency_key = generate_idempotency_key(
+        appointment_id=appointment_id,
+        action="cancel",
+    )
+
+    result = await scheduler.cancel_appointment(
+        appointment_id, idempotency_key=idempotency_key
+    )
 
     if result.success and result.appointment:
         return {
@@ -308,7 +372,15 @@ async def confirm_appointment_tool(
 
     scheduler = get_scheduler()
 
-    result = await scheduler.confirm_appointment(appointment_id)
+    # Generate idempotency key
+    idempotency_key = generate_idempotency_key(
+        appointment_id=appointment_id,
+        action="confirm",
+    )
+
+    result = await scheduler.confirm_appointment(
+        appointment_id, idempotency_key=idempotency_key
+    )
 
     if result.success and result.appointment:
         return {
@@ -367,9 +439,9 @@ async def get_appointment_tool(appointment_id: str) -> dict:
 async def get_office_info_tool(info_type: str = "hours") -> dict:
     """Get office information.
 
-    Returns office hours, address, or phone number.
+    Returns office hours, address, phone, or other configured information.
     """
-    # Placeholder for office configuration
+    # Placeholder for office configuration - should be moved to a config file
     office_info = {
         "hours": {
             "monday": "8:00 AM - 5:00 PM",

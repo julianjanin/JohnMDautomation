@@ -6,7 +6,7 @@ the medical office scheduling domain.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -87,10 +87,11 @@ class Appointment(BaseModel):
     location_id: str
     start_time: datetime
     end_time: datetime
-    status: str = "scheduled"  # scheduled, completed, canceled, no_show
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    status: str = "scheduled"  # scheduled, completed, canceled, no_show, confirmed
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     external_id: Optional[str] = None  # ID from external scheduling system
+    idempotency_key: Optional[str] = None  # For idempotent operations
 
 
 class AvailabilitySlot(BaseModel):
@@ -122,7 +123,7 @@ class SchedulingResult(BaseModel):
     success: bool
     appointment: Optional[Appointment] = None
     error_message: Optional[str] = None
-    alternative_slots: list[AvailabilitySlot] = []
+    alternative_slots: list[AvailabilitySlot] = Field(default_factory=list)
 
 
 class StaffEscalation(BaseModel):
@@ -133,6 +134,6 @@ class StaffEscalation(BaseModel):
     caller_name: str
     caller_phone: str
     message: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = "pending"  # pending, contacted, completed
     staff_member: Optional[str] = None

@@ -59,7 +59,7 @@ The foundation is the Dograh voice AI platform, which provides:
 Custom scheduling functionality built on top of Dograh:
 
 - **Domain Models** (`api/services/scheduling/models.py`)
-  - `Appointment` - Appointment entity
+  - `Appointment` - Appointment entity with status, timing, and patient info
   - `AppointmentType` - Types of ENT appointments
   - `AvailabilitySlot` - Available time slots
   - `CallIntent` - Call intent classification
@@ -93,8 +93,8 @@ The voice agent is configured through Dograh's workflow system:
 
 ```
 Call Received
-     │
-     ▼
+      │
+      ▼
 ┌─────────────────┐
 │   Greeting      │
 │   (Configurable)│
@@ -113,9 +113,9 @@ Call Received
 │   Classification│
 └────────┬────────┘
          │
-    ┌────┴────┬─────────────┬─────────────┬─────────────┐
-    │         │             │             │             │
-    ▼         ▼             ▼             ▼             ▼
+     ┌────┴────┬─────────────┬─────────────┬─────────────┐
+     │         │             │             │             │
+     ▼         ▼             ▼             ▼             ▼
 ┌───────┐ ┌───────┐   ┌───────────┐ ┌───────────┐ ┌───────────┐
 │NEW_APPT│ │CONFIRM│   │RESCHEDULE │ │CANCEL     │ │CLINICAL   │
 │       │ │APPT   │   │APPT       │ │APPT       │ │QUESTION   │
@@ -153,8 +153,8 @@ Call Received
 └────────┬────────┘ └────────┬────────┘ └────────┬────────┘
          │                   │                   │
          └───────────────────┼───────────────────┘
-                             │
-                             ▼
+                               │
+                               ▼
                     ┌─────────────────┐
                     │   Call          │
                     │   Disposition   │
@@ -165,8 +165,8 @@ Call Received
 
 ```
 Scheduled Appointment
-         │
-         ▼
+          │
+          ▼
 ┌─────────────────┐
 │   Initiate      │
 │   Outbound Call │
@@ -194,9 +194,9 @@ Scheduled Appointment
 │     Staff       │
 └────────┬────────┘
          │
-    ┌────┴────┬─────────────┬─────────────┐
-    │         │             │             │
-    ▼         ▼             ▼             ▼
+     ┌────┴────┬─────────────┬─────────────┐
+     │         │             │             │
+     ▼         ▼             ▼             ▼
 ┌───────┐ ┌───────┐   ┌───────────┐ ┌───────────┐
 │CONFIRM│ │RESCHED│   │CANCEL     │ │TRANSFER   │
 │       │ │ULE    │   │           │ │TO STAFF   │
@@ -253,30 +253,30 @@ All clinical questions are escalated to staff immediately. The AI captures minim
 
 ```
 Caller ──► Telephony Provider (Twilio/Telnyx/etc.)
-               │
-               ▼
-         Dograh Inbound Router
-               │
-               ▼
-         Voice Agent (Pipecat)
-               │
-               ▼
-         LLM (Conversation)
-               │
-               ▼
-         Scheduling Tools
-               │
-               ▼
-         Scheduler Adapter
-               │
-               ▼
-         [Mock Scheduler | Real EHR/PM System]
-               │
-               ▼
-         Database (PostgreSQL)
-               │
-               ▼
-         Call Disposition
+                │
+                ▼
+          Dograh Inbound Router
+                │
+                ▼
+          Voice Agent (Pipecat)
+                │
+                ▼
+          LLM (Conversation)
+                │
+                ▼
+          Scheduling Tools
+                │
+                ▼
+          Scheduler Adapter
+                │
+                ▼
+          [Mock Scheduler | Real EHR/PM System]
+                │
+                ▼
+          Database (PostgreSQL)
+                │
+                ▼
+          Call Disposition
 ```
 
 ## Configuration
@@ -300,3 +300,27 @@ python -m pytest api/services/scheduling/tests/ -v
 4. **Patient Portal Integration** - Verify patient identity
 5. **Insurance Verification** - Check eligibility before booking
 6. **Reminder System** - Automated outbound reminders
+
+## Design Decisions
+
+### Timezone Handling
+- Uses timezone-aware datetime objects
+- `PRACTICE_TZ` constant configurable for practice timezone
+- Avoids `datetime.utcnow()` for business scheduling
+
+### Double-Booking Prevention
+- Uses half-open interval semantics `[start, end)`
+- Overlap check: `start1 < end2 AND start2 < end1`
+- Considers provider, location, and time
+- Active statuses: `scheduled`, `confirmed`
+- Non-blocking status: `canceled`
+
+### Idempotency
+- All state-changing operations support `idempotency_key`
+- Prevents duplicate appointments on retry
+- SHA-256 hash of operation parameters
+
+### Patient Lookup
+- Returns synthetic patient data for testing
+- Known phones return patient info
+- Unknown phones return None (new patient)
