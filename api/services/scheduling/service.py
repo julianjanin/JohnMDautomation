@@ -6,6 +6,7 @@ and provides business logic for scheduling operations.
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from .models import (
     Appointment,
@@ -17,6 +18,7 @@ from .models import (
     SchedulingResult,
     StaffEscalation,
 )
+from .practice_config import get_practice_config
 from .scheduler import MockSchedulerAdapter
 
 
@@ -32,9 +34,15 @@ class SchedulingService:
         
         Args:
             scheduler: Optional scheduler adapter. If not provided, a new
-                      MockSchedulerAdapter will be created.
+                      MockSchedulerAdapter will be created with the practice
+                      timezone from PracticeConfiguration.
         """
-        self._scheduler = scheduler or MockSchedulerAdapter()
+        if scheduler is not None:
+            self._scheduler = scheduler
+        else:
+            config = get_practice_config()
+            practice_tz = ZoneInfo(config.practice_timezone)
+            self._scheduler = MockSchedulerAdapter(practice_timezone=practice_tz)
     
     @property
     def scheduler(self) -> MockSchedulerAdapter:

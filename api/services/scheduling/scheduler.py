@@ -8,6 +8,7 @@ The actual implementation can be swapped out for different scheduling systems
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from .models import (
     Appointment,
@@ -109,9 +110,6 @@ class MockSchedulerAdapter(SchedulerAdapter):
     require external credentials or systems.
     """
 
-    # Practice timezone for scheduling
-    PRACTICE_TZ = timezone.utc  # Can be changed to America/New_York in production
-
     # Daily slot start times (in 24-hour format)
     SLOT_START_TIMES = [
         (9, 0),   # 9:00 AM
@@ -123,8 +121,14 @@ class MockSchedulerAdapter(SchedulerAdapter):
     # Appointment duration in minutes
     APPOINTMENT_DURATION_MINUTES = 30
 
-    def __init__(self):
-        """Initialize the mock scheduler with synthetic data."""
+    def __init__(self, practice_timezone: Optional[ZoneInfo] = None):
+        """Initialize the mock scheduler with synthetic data.
+
+        Args:
+            practice_timezone: The timezone for scheduling. Defaults to
+                America/New_York if not provided.
+        """
+        self._practice_tz = practice_timezone or ZoneInfo("America/New_York")
         self._appointments: dict[str, Appointment] = {}
         self._providers = {
             "dr-john-li": AppointmentType.NEW_PATIENT_CONSULT,
@@ -148,6 +152,11 @@ class MockSchedulerAdapter(SchedulerAdapter):
             },
         }
 
+    @property
+    def practice_timezone(self) -> ZoneInfo:
+        """Get the practice timezone."""
+        return self._practice_tz
+
     async def list_appointment_types(self) -> list[AppointmentType]:
         """List all available appointment types."""
         return self._appointment_types
@@ -166,9 +175,9 @@ class MockSchedulerAdapter(SchedulerAdapter):
 
         # Ensure start_date is timezone-aware
         if start_date.tzinfo is None:
-            start_date = start_date.replace(tzinfo=self.PRACTICE_TZ)
+            start_date = start_date.replace(tzinfo=self._practice_tz)
         if end_date.tzinfo is None:
-            end_date = end_date.replace(tzinfo=self.PRACTICE_TZ)
+            end_date = end_date.replace(tzinfo=self._practice_tz)
 
         # Generate mock availability for the date range
         current = start_date
