@@ -24,14 +24,14 @@ from .scheduler import MockSchedulerAdapter
 
 class SchedulingService:
     """Service layer for scheduling operations.
-    
+
     This class provides business logic for scheduling operations,
     including validation, idempotency, and state management.
     """
-    
+
     def __init__(self, scheduler: Optional[MockSchedulerAdapter] = None):
         """Initialize the scheduling service.
-        
+
         Args:
             scheduler: Optional scheduler adapter. If not provided, a new
                       MockSchedulerAdapter will be created with the practice
@@ -43,12 +43,12 @@ class SchedulingService:
             config = get_practice_config()
             practice_tz = ZoneInfo(config.practice_timezone)
             self._scheduler = MockSchedulerAdapter(practice_timezone=practice_tz)
-    
+
     @property
     def scheduler(self) -> MockSchedulerAdapter:
         """Get the scheduler adapter."""
         return self._scheduler
-    
+
     async def find_availability(
         self,
         appointment_type: AppointmentType,
@@ -59,7 +59,7 @@ class SchedulingService:
         location_id: Optional[str] = None,
     ) -> list[AvailabilitySlot]:
         """Find available appointment slots.
-        
+
         Args:
             appointment_type: Type of appointment to find slots for
             preferred_date: Preferred date (if None, searches from today)
@@ -67,14 +67,15 @@ class SchedulingService:
             days_ahead: Number of days to search ahead
             provider_id: Optional provider ID to filter by
             location_id: Optional location ID to filter by
-            
+
         Returns:
             List of available time slots
         """
-        now = datetime.now(timezone.utc)
+        # BUG 1 FIX: Use practice timezone instead of UTC
+        now = datetime.now(self._scheduler.practice_timezone)
         start_date = preferred_date or now
         end_date = start_date + timedelta(days=days_ahead)
-        
+
         return await self._scheduler.find_availability(
             appointment_type=appointment_type,
             start_date=start_date,
@@ -83,7 +84,7 @@ class SchedulingService:
             location_id=location_id,
             preferred_time=preferred_time,
         )
-    
+
     async def book_appointment(
         self,
         patient_name: str,
@@ -97,7 +98,7 @@ class SchedulingService:
         idempotency_key: Optional[str] = None,
     ) -> SchedulingResult:
         """Book a new appointment.
-        
+
         Args:
             patient_name: Patient's full name
             patient_phone: Patient's phone number
@@ -108,17 +109,20 @@ class SchedulingService:
             provider_id: Provider ID (defaults to dr-john-li)
             location_id: Location ID (defaults to main-office)
             idempotency_key: Optional idempotency key for retry safety
-            
+
         Returns:
             SchedulingResult with success status and appointment details
         """
         # Validate provider and location
         provider_id = provider_id or "dr-john-li"
         location_id = location_id or "main-office"
-        
+
+        # Normalize start_time to practice timezone for consistent comparison
+        start_time = self._scheduler._to_practice_timezone(start_time)
+
         # Calculate end time (30 minute appointment)
         end_time = start_time + timedelta(minutes=30)
-        
+
         # Validate that the requested slot is available
         available_slots = await self._scheduler.find_availability(
             appointment_type=appointment_type,
@@ -127,18 +131,18 @@ class SchedulingService:
             provider_id=provider_id,
             location_id=location_id,
         )
-        
+
         slot_available = any(
             slot.start_time == start_time and slot.end_time == end_time
             for slot in available_slots
         )
-        
+
         if not slot_available:
             return SchedulingResult(
                 success=False,
                 error_message="Requested time slot is no longer available. Please select another time.",
             )
-        
+
         # Create the appointment
         return await self._scheduler.create_appointment(
             patient_name=patient_name,
@@ -152,7 +156,7 @@ class SchedulingService:
             new_patient=new_patient,
             idempotency_key=idempotency_key,
         )
-    
+
     async def reschedule_appointment(
         self,
         appointment_id: str,
@@ -160,24 +164,26 @@ class SchedulingService:
         idempotency_key: Optional[str] = None,
     ) -> SchedulingResult:
         """Reschedule an existing appointment.
-        
+
         Args:
             appointment_id: ID of the appointment to reschedule
             new_start_time: New start time
             idempotency_key: Optional idempotency key for retry safety
-            
+
         Returns:
             SchedulingResult with success status and appointment details
         """
+        # Normalize new_start_time to practice timezone for consistent comparison
+        new_start_time = self._scheduler._to_practice_timezone(new_start_time)
         new_end_time = new_start_time + timedelta(minutes=30)
-        
+
         return await self._scheduler.reschedule_appointment(
             appointment_id=appointment_id,
             new_start_time=new_start_time,
             new_end_time=new_end_time,
             idempotency_key=idempotency_key,
         )
-    
+
     async def cancel_appointment(
         self,
         appointment_id: str,
@@ -185,12 +191,12 @@ class SchedulingService:
         idempotency_key: Optional[str] = None,
     ) -> SchedulingResult:
         """Cancel an existing appointment.
-        
+
         Args:
             appointment_id: ID of the appointment to cancel
             confirmation: Must be 'yes' to confirm cancellation
             idempotency_key: Optional idempotency key for retry safety
-            
+
         Returns:
             SchedulingResult with success status and appointment details
         """
@@ -199,12 +205,12 @@ class SchedulingService:
                 success=False,
                 error_message="Cancellation not confirmed. Please confirm with 'yes'.",
             )
-        
+
         return await self._scheduler.cancel_appointment(
             appointment_id=appointment_id,
             idempotency_key=idempotency_key,
         )
-    
+
     async def confirm_appointment(
         self,
         appointment_id: str,
@@ -212,12 +218,12 @@ class SchedulingService:
         idempotency_key: Optional[str] = None,
     ) -> SchedulingResult:
         """Confirm an existing appointment.
-        
+
         Args:
             appointment_id: ID of the appointment to confirm
             confirmation: Must be 'yes' to confirm
             idempotency_key: Optional idempotency key for retry safety
-            
+
         Returns:
             SchedulingResult with success status and appointment details
         """
@@ -226,40 +232,40 @@ class SchedulingService:
                 success=False,
                 error_message="Confirmation not confirmed. Please confirm with 'yes'.",
             )
-        
+
         return await self._scheduler.confirm_appointment(
             appointment_id=appointment_id,
             idempotency_key=idempotency_key,
         )
-    
+
     async def lookup_patient(self, phone: str) -> Optional[dict]:
         """Look up a patient by phone number.
-        
+
         Args:
             phone: Patient's phone number
-            
+
         Returns:
             Patient info if found, None otherwise
         """
         return await self._scheduler.lookup_patient_by_phone(phone)
-    
+
     async def get_appointment(self, appointment_id: str) -> Optional[Appointment]:
         """Get an appointment by ID.
-        
+
         Args:
             appointment_id: ID of the appointment
-            
+
         Returns:
             Appointment if found, None otherwise
         """
         return await self._scheduler.get_appointment(appointment_id)
-    
+
     async def get_office_info(self, info_type: str = "hours") -> dict:
         """Get office information.
-        
+
         Args:
             info_type: Type of information to retrieve (hours, address, phone)
-            
+
         Returns:
             Dictionary with office information
         """
@@ -279,12 +285,12 @@ class SchedulingService:
             "provider": "Dr. John Li, MD",
             "specialty": "ENT / Otolaryngology",
         }
-        
+
         if info_type in office_info:
             return office_info[info_type]
-        
+
         return {"error": f"Unknown info type: {info_type}"}
-    
+
     async def create_staff_escalation(
         self,
         reason: str,
@@ -293,13 +299,13 @@ class SchedulingService:
         message: Optional[str] = None,
     ) -> StaffEscalation:
         """Create a staff escalation request.
-        
+
         Args:
             reason: Reason for escalation
             caller_name: Caller's name
             caller_phone: Caller's phone number
             message: Optional message
-            
+
         Returns:
             StaffEscalation object
         """
@@ -309,10 +315,10 @@ class SchedulingService:
             caller_phone=caller_phone,
             message=message,
         )
-    
+
     def list_appointment_types(self) -> list[AppointmentType]:
         """List all available appointment types.
-        
+
         Returns:
             List of appointment types
         """

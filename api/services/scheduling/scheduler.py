@@ -137,7 +137,7 @@ class MockSchedulerAdapter(SchedulerAdapter):
             "main-office": "Main Office",
         }
         self._appointment_types = list(AppointmentType)
-        
+
         # Synthetic patient fixtures
         self._patients = {
             "+15551234567": {
@@ -157,6 +157,24 @@ class MockSchedulerAdapter(SchedulerAdapter):
         """Get the practice timezone."""
         return self._practice_tz
 
+    def _to_practice_timezone(self, value: datetime) -> datetime:
+        """Normalize a datetime to the practice timezone.
+
+        If the datetime is naive, it is interpreted as local practice time.
+        If the datetime is timezone-aware, it is converted to the practice timezone.
+
+        Args:
+            value: The datetime to normalize
+
+        Returns:
+            The datetime in the practice timezone
+        """
+        if value.tzinfo is None:
+            # Naive datetime: interpret as local practice time
+            return value.replace(tzinfo=self._practice_tz)
+        # Aware datetime: convert to practice timezone
+        return value.astimezone(self._practice_tz)
+
     async def list_appointment_types(self) -> list[AppointmentType]:
         """List all available appointment types."""
         return self._appointment_types
@@ -173,11 +191,9 @@ class MockSchedulerAdapter(SchedulerAdapter):
         """Find available appointment slots matching the criteria."""
         slots = []
 
-        # Ensure start_date is timezone-aware
-        if start_date.tzinfo is None:
-            start_date = start_date.replace(tzinfo=self._practice_tz)
-        if end_date.tzinfo is None:
-            end_date = end_date.replace(tzinfo=self._practice_tz)
+        # BUG 2 FIX: Normalize both start_date and end_date to practice timezone
+        start_date = self._to_practice_timezone(start_date)
+        end_date = self._to_practice_timezone(end_date)
 
         # Generate mock availability for the date range
         current = start_date
@@ -219,7 +235,7 @@ class MockSchedulerAdapter(SchedulerAdapter):
         location_id: Optional[str],
     ) -> bool:
         """Check if a slot is already booked by an active appointment.
-        
+
         An appointment is considered "active" if its status is 'scheduled' or 'confirmed'.
         'canceled' appointments do not block slots.
         """
@@ -227,32 +243,32 @@ class MockSchedulerAdapter(SchedulerAdapter):
             # Only check active appointments (scheduled or confirmed)
             if appointment.status not in ("scheduled", "confirmed"):
                 continue
-            
+
             # Check provider match
             if provider_id and appointment.provider_id != provider_id:
                 continue
-            
+
             # Check location match
             if location_id and appointment.location_id != location_id:
                 continue
-            
+
             # Check for time overlap using half-open interval [start, end)
             # Two intervals [a, b) and [c, d) overlap if a < d and c < b
             if self._intervals_overlap(
                 appointment.start_time, appointment.end_time, slot_start, slot_end
             ):
                 return True
-        
+
         return False
 
     def _intervals_overlap(
         self, start1: datetime, end1: datetime, start2: datetime, end2: datetime
     ) -> bool:
         """Check if two time intervals overlap using half-open interval semantics.
-        
+
         Intervals [start1, end1) and [start2, end2) overlap if:
         start1 < end2 AND start2 < end1
-        
+
         This is the standard half-open interval overlap check.
         """
         return start1 < end2 and start2 < end1
@@ -294,7 +310,7 @@ class MockSchedulerAdapter(SchedulerAdapter):
             # Only check active appointments
             if existing.status not in ("scheduled", "confirmed"):
                 continue
-            
+
             # Check provider and location match
             if existing.provider_id == provider_id and existing.location_id == location_id:
                 # Check for time overlap
@@ -409,7 +425,7 @@ class MockSchedulerAdapter(SchedulerAdapter):
         self, phone: str
     ) -> Optional[dict]:
         """Look up a patient by phone number.
-        
+
         Returns synthetic patient data if found, None otherwise.
         """
         return self._patients.get(phone)
